@@ -52,12 +52,18 @@ impl<'ctx> std::fmt::Display for State<'ctx> {
     }
 }
 
+pub struct Loc {
+    block: ir::InstrSeqId,
+    loc: ir::InstrLocId,
+}
+
 #[derive(Debug, Clone)]
 pub struct Execution<'ctx> {
     pub id: usize,
     pub state: State<'ctx>,
     pub constraints: Vec<z3::ast::Bool<'ctx>>,
     pub cur_block: ir::InstrSeqId,
+    pub cur_location: Option<ir::InstrLocId>, // None if start of block
     pub status: Status,
     pub checks: Vec<Box<dyn Check<'ctx> + 'ctx>>,
 }
@@ -71,6 +77,7 @@ impl<'ctx> Execution<'ctx> {
             constraints: Vec::new(),
             state,
             cur_block: entry,
+            cur_location: None,
             status: Status::None,
             checks: Vec::new(),
         }

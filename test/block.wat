@@ -1,0 +1,26 @@
+(module
+    (func $block (param $cond i32) (result i32)
+        (block $b
+            (br_if $b (local.get $cond))
+            (i32.const 123)
+            return
+        )
+        (i32.const 456)
+    )
+
+    (func $twoblock (param $cond i32) (result i32)
+        (block $b (result i32)
+            (i32.const 456)
+            (br_if $b (local.get $cond))
+            (drop)
+            (i32.const 123)
+        )
+        (block $b (result i32)
+            (i32.const 0)
+            (br_if $b (local.get $cond))
+            (drop)
+            (i32.const 1)
+        )
+        (i32.div_s)
+    )
+)

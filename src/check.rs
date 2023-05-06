@@ -84,7 +84,7 @@ impl<'ctx> Check<'ctx> for DivisionByZeroCheck<'ctx> {
                             .insert(loc.data(), val.as_i32()._eq(&context.zero(32)));
                     }
                 }
-                trace!("{:?}", self.constraints);
+                // trace!("{:?}", self.constraints);
             }
         }
     }

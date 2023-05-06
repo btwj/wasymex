@@ -5,12 +5,14 @@ use crate::state::{Execution, State, Status, TrapReason};
 use crate::value::{ConcVal, SymVal, Val};
 use log::{debug, info, trace};
 use std::collections::{HashMap, VecDeque};
-use walrus::ir;
+use walrus::{InstrLocId, ir};
 use z3::ast::Ast;
+use crate::flow::{compute_locs, Locs};
 
 pub struct Engine<'ctx, 'm> {
     context: &'ctx Context<'m>,
     func: Option<&'m walrus::LocalFunction>,
+    locs: Option<Locs>,
     executions: VecDeque<Execution<'ctx>>,
     checks: Vec<Box<dyn Check<'ctx> + 'ctx>>,
 }
@@ -20,6 +22,7 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
         Engine {
             context,
             func: None,
+            locs: None,
             executions: VecDeque::new(),
             checks: Vec::new(),
         }
@@ -35,12 +38,16 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                 .name
                 .clone()
                 .unwrap_or(format!("#{}", func.id().index()));
+
             match &func.kind {
                 walrus::FunctionKind::Import(_) => info!("Skipping import function {}", name),
                 walrus::FunctionKind::Uninitialized(_) => {
                     info!("Skipping uninitialized function {}", name)
                 }
                 walrus::FunctionKind::Local(local_func) => {
+                    let locs = compute_locs(local_func);
+                    println!("{:?}", locs);
+                    self.locs = Some(locs);
                     self.analyze_func(local_func, &name);
                 }
             }
@@ -65,6 +72,7 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
             state.locals.insert(*param_id, symbolic_param.clone());
             inputs.insert(*param_id, symbolic_param);
         }
+        let entry = func.entry_block();
         let mut execution = Execution::new(state, func.entry_block());
         for check in &self.checks {
             execution.add_check(dyn_clone::clone_box(&**check));
@@ -103,7 +111,18 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
         let func = self.func.unwrap();
         let cur_block = func.block(execution.cur_block);
 
+        let mut skipped = execution.cur_location.is_none();
+
         for (instr, instr_loc) in &cur_block.instrs {
+            // Skip execution to current location
+            if let Some(cur_location) = execution.cur_location {
+                if !skipped && cur_location.data() != instr_loc.data() {
+                    continue;
+                }
+            }
+            skipped = true;
+            execution.cur_location = Some(*instr_loc);
+
             trace!("  #{} {:?}", execution.id, instr);
 
             let mut execution_checks = std::mem::take(&mut execution.checks);
@@ -143,6 +162,12 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                     let value = execution.state.value_stack.pop().unwrap();
                     execution.state.locals.insert(imm.local, value.clone());
                 }
+                ir::Instr::Block(imm) => {
+                    execution.cur_block = imm.seq;
+                    execution.cur_location = None;
+                    self.push_execution(execution);
+                    return None;
+                }
                 ir::Instr::Br(imm) => {
                     execution.cur_block = imm.block;
                     self.push_execution(execution);
@@ -163,7 +188,11 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                             true_execution
                                 .constraints
                                 .push(val.as_i32()._eq(&self.zero(32)).not());
-                            true_execution.cur_block = imm.block;
+                            let true_block_loc = self.locs.as_ref().unwrap().ends.get(&imm.block).unwrap();
+                            true_execution.cur_block = true_block_loc.block;
+                            true_execution.cur_location = Some(InstrLocId::new(true_block_loc.loc));
+
+                            execution.constraints.push(val.as_i32()._eq(&self.zero(32)));
 
                             trace!(
                                 "Forking execution #{} on {:?} -> [true: #{}/false: #{}]",
@@ -174,8 +203,6 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                             );
 
                             self.push_execution(true_execution);
-                            self.push_execution(execution);
-                            return None;
                         }
                     }
                 }
@@ -195,12 +222,14 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                                 .constraints
                                 .push(val.as_i32()._eq(&self.zero(32)).not());
                             true_execution.cur_block = imm.consequent;
+                            true_execution.cur_location = None;
 
                             let mut false_execution = Execution::from(&execution);
                             false_execution
                                 .constraints
                                 .push(val.as_i32()._eq(&self.zero(32)));
                             false_execution.cur_block = imm.alternative;
+                            false_execution.cur_location = None;
 
                             trace!(
                                 "Forking execution #{} on {:?} -> [true: #{}/false: #{}]",
@@ -216,13 +245,28 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                         }
                     }
                 }
+                ir::Instr::Return(imm) => {
+                    execution.status = Status::Complete;
+                    return Some(execution);
+                }
                 _ => unimplemented!(),
             }
 
             // trace!("      -> {}", execution.state);
         }
-        execution.status = Status::Complete;
-        return Some(execution);
+
+        match self.locs.as_ref().unwrap().ends.get(&cur_block.id()) {
+            None => {
+                execution.status = Status::Complete;
+                return Some(execution);
+            }
+            Some(end) => {
+                execution.cur_block = end.block;
+                execution.cur_location = Some(ir::InstrLocId::new(end.loc));
+                self.push_execution(execution);
+                return None;
+            }
+        }
     }
 }
 

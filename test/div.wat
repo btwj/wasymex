@@ -9,6 +9,7 @@
                 (i32.div_s (local.get $dividend) (i32.const 1))
             )
         )
+        (drop (i32.const 0))
     )
 
     (func $unsafediv (param $divisor i32) (param $dividend i32) (result i32)
