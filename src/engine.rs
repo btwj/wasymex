@@ -1,5 +1,6 @@
 use crate::check::{Check, CheckResult};
 use crate::context::Context;
+use crate::reporter::Reporter;
 use crate::state::{Execution, State, Status, TrapReason};
 use crate::value::{ConcVal, SymVal, Val};
 use log::{debug, info, trace};
@@ -29,37 +30,26 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
     }
 
     pub fn analyze_module(&mut self) {
-        for (func_id, local_func) in self.context.module.funcs.iter_local() {
-            info!("Analyzing function #{}", func_id.index());
-            self.analyze_func(local_func);
+        for func in self.context.module.funcs.iter() {
+            let name = func
+                .name
+                .clone()
+                .unwrap_or(format!("#{}", func.id().index()));
+            match &func.kind {
+                walrus::FunctionKind::Import(_) => info!("Skipping import function {}", name),
+                walrus::FunctionKind::Uninitialized(_) => {
+                    info!("Skipping uninitialized function {}", name)
+                }
+                walrus::FunctionKind::Local(local_func) => {
+                    self.analyze_func(local_func, &name);
+                }
+            }
         }
     }
 
-    fn format_model(inputs: &HashMap<ir::LocalId, Val>, model: &z3::Model) -> String {
-        inputs
-            .iter()
-            .map(|(local_id, input_value)| {
-                format!(
-                    "local{}={}",
-                    local_id.index(),
-                    match input_value {
-                        Val::Conc(val) => format!("{}", val),
-                        Val::Sym(val) => {
-                            format!(
-                                "{}",
-                                match val {
-                                    SymVal::I32(i32_val) => model.eval(i32_val, true).unwrap(),
-                                }
-                            )
-                        }
-                    }
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
+    pub fn analyze_func(&mut self, func: &'m walrus::LocalFunction, name: &str) {
+        info!("Analyzing function #{}", name);
 
-    pub fn analyze_func(&mut self, func: &'m walrus::LocalFunction) {
         self.func = Some(func);
         let mut inputs = HashMap::new();
 
@@ -83,39 +73,12 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
         self.push_execution(execution);
 
         let context = self.context;
-        let completed_executions = self.collect_executions();
+        let reporter = Reporter::new();
 
-        info!("Analyzing Executions");
-
-        for mut execution in completed_executions.into_iter() {
-            let model_input = execution.solve(&context);
-            match model_input {
-                None => {
-                    trace!("  #{}: Infeasible", execution.id);
-                    continue;
-                }
-                Some(model) => {
-                    trace!(
-                        "  #{}: Feasible; Input=[{}]",
-                        execution.id,
-                        Self::format_model(&inputs, &model)
-                    );
-
-                    let mut execution_checks = std::mem::take(&mut execution.checks);
-                    for check in &mut execution_checks {
-                        match check.run(&self.context, &execution) {
-                            CheckResult::Ok => trace!("    | [{}] ✓", check.name()),
-                            CheckResult::PossibleFail(message) => {
-                                trace!("    | [{}] ? {}", check.name(), message)
-                            }
-                            CheckResult::Fail(message) => {
-                                trace!("    | [{}] ✗ {}", check.name(), message)
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let mut completed_executions = self.collect_executions();
+        reporter.report_func(name);
+        reporter.report_executions(&self.context, &completed_executions);
+        reporter.report_checks(&context, &inputs, &mut completed_executions);
     }
 
     pub fn push_execution(&mut self, execution: Execution<'ctx>) {
@@ -131,11 +94,6 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                 }
                 None => (),
             }
-        }
-
-        info!("Collected {} Execution Paths", completed_executions.len());
-        for execution in completed_executions.iter() {
-            info!("  {}", execution);
         }
 
         completed_executions
@@ -261,7 +219,7 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                 _ => unimplemented!(),
             }
 
-            trace!("      -> {}", execution.state);
+            // trace!("      -> {}", execution.state);
         }
         execution.status = Status::Complete;
         return Some(execution);

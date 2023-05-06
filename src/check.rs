@@ -1,4 +1,5 @@
 use crate::context::Context;
+use crate::reporter::Reporter;
 use crate::state::Execution;
 use crate::value::{SymVal, Val};
 use dyn_clone::DynClone;
@@ -24,7 +25,12 @@ pub trait Check<'ctx>: DynClone + std::fmt::Debug {
         loc: &ir::InstrLocId,
     );
 
-    fn run(&mut self, context: &'ctx Context, execution: &Execution<'ctx>) -> CheckResult;
+    fn run(
+        &mut self,
+        context: &'ctx Context,
+        execution: &Execution<'ctx>,
+        inputs: &HashMap<ir::LocalId, Val<'ctx>>,
+    ) -> CheckResult;
 }
 
 impl<'ctx> Clone for Box<dyn Check<'ctx> + 'ctx> {
@@ -83,16 +89,23 @@ impl<'ctx> Check<'ctx> for DivisionByZeroCheck<'ctx> {
         }
     }
 
-    fn run(&mut self, context: &'ctx Context, execution: &Execution<'ctx>) -> CheckResult {
+    fn run(
+        &mut self,
+        context: &'ctx Context,
+        execution: &Execution<'ctx>,
+        inputs: &HashMap<ir::LocalId, Val<'ctx>>,
+    ) -> CheckResult {
         let mut solver = execution.get_solver(context);
         for (loc, constraint) in &self.constraints {
             solver.push();
             solver.assert(constraint);
 
             if solver.check() != z3::SatResult::Unsat {
-                trace!("{:?}", self.constraints);
-                trace!("{:?}", solver.get_model());
-                return CheckResult::Fail(format!("+{}", loc));
+                return CheckResult::Fail(format!(
+                    "division by zero @ +{} with inputs {}",
+                    loc,
+                    Reporter::format_model(inputs, &solver.get_model().unwrap())
+                ));
             }
 
             solver.pop(1);

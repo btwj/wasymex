@@ -1,6 +1,7 @@
 mod check;
 mod context;
 mod engine;
+mod reporter;
 mod state;
 mod value;
 
@@ -14,9 +15,13 @@ use fern;
 struct Args {
     #[arg(short, long)]
     input: String,
+
+    #[arg(short, long)]
+    quiet: bool,
 }
 
 fn main() {
+    let args = Args::parse();
     let log_colors = fern::colors::ColoredLevelConfig::new()
         .info(fern::colors::Color::White)
         .debug(fern::colors::Color::White)
@@ -37,12 +42,18 @@ fn main() {
             ))
         })
         .level(log::LevelFilter::Error)
-        .level_for("wasymex", log::LevelFilter::Trace)
+        .level_for(
+            "wasymex",
+            if args.quiet {
+                log::LevelFilter::Error
+            } else {
+                log::LevelFilter::Trace
+            },
+        )
         .chain(std::io::stdout())
         .apply()
         .unwrap();
 
-    let args = Args::parse();
     let wasm_module = walrus::Module::from_file(args.input).unwrap();
 
     let context = Context::new(&wasm_module);
