@@ -10,7 +10,7 @@ struct Args {
     quiet: bool,
 
     #[arg(short, long)]
-    max_loop_iters: Option<usize>,
+    max_hotness: Option<usize>,
 }
 
 fn main() {
@@ -52,8 +52,8 @@ fn main() {
     let context = wasymex::context::Context::new(&wasm_module);
     let mut engine = wasymex::engine::Engine::new(&context);
 
-    if let Some(max_loop_iters) = args.max_loop_iters {
-        engine.set_max_loop_iters(max_loop_iters);
+    if let Some(max_loop_iters) = args.max_hotness {
+        engine.set_max_hotness(max_loop_iters);
     }
 
     engine.add_check(Box::new(DivisionByZeroCheck::new()));

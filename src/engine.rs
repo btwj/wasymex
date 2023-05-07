@@ -16,7 +16,7 @@ pub struct Engine<'ctx, 'm> {
     info: Info,
     executions: VecDeque<Execution<'ctx>>,
     checks: Vec<Box<dyn Check<'ctx> + 'ctx>>,
-    max_loop_iters: usize,
+    max_hotness: usize,
 }
 
 impl<'ctx, 'm> Engine<'ctx, 'm> {
@@ -27,12 +27,12 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
             info: Info::default(),
             executions: VecDeque::new(),
             checks: Vec::new(),
-            max_loop_iters: 1,
+            max_hotness: 1,
         }
     }
 
-    pub fn set_max_loop_iters(&mut self, max_loop_iters: usize) {
-        self.max_loop_iters = max_loop_iters;
+    pub fn set_max_hotness(&mut self, max_hotness: usize) {
+        self.max_hotness = max_hotness;
     }
 
     pub fn add_check(&mut self, check: Box<dyn Check<'ctx> + 'ctx>) {
@@ -78,10 +78,7 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
     pub fn get_initial_execution(&mut self, func: &'m walrus::LocalFunction) -> Execution<'ctx> {
         let inputs = self.get_inputs(func);
         let mut state = State::new();
-
-        for (param_id, param) in inputs.iter() {
-            state.locals.insert(*param_id, param.clone());
-        }
+        state.locals.extend(inputs.clone());
 
         for local in self.info.locals.iter() {
             if !state.locals.contains_key(local) {
@@ -182,7 +179,7 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
             *execution.hotness.entry(cur_block.id()).or_insert(0) += 1;
         }
 
-        if *execution.hotness.get(&cur_block.id()).unwrap() > self.max_loop_iters {
+        if *execution.hotness.get(&cur_block.id()).unwrap() > self.max_hotness {
             execution.status = Status::Terminated;
             return Some(execution);
         }
