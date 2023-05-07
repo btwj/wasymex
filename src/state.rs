@@ -6,22 +6,43 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use walrus::ir;
 use z3;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TrapReason {
     DivisionByZero,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Status {
     None,
     Complete,
     Trap(TrapReason),
+    Terminated,
+}
+
+#[derive(Debug, Clone)]
+pub struct Memory<'ctx> {
+    pub size: u32, // size in bytes
+    pub array: z3::ast::Array<'ctx>,
+}
+
+impl<'ctx> Memory<'ctx> {
+    pub fn new(context: &'ctx z3::Context, initial: u32) -> Self {
+        Memory {
+            size: initial,
+            array: z3::ast::Array::const_array(
+                context,
+                &z3::Sort::bitvector(context, 8),
+                &z3::ast::BV::from_i64(context, 0, 8),
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct State<'ctx> {
     pub value_stack: Vec<Val<'ctx>>,
     pub locals: HashMap<ir::LocalId, Val<'ctx>>,
+    pub memory: Option<Memory<'ctx>>,
 }
 
 impl<'ctx> State<'ctx> {
@@ -29,6 +50,7 @@ impl<'ctx> State<'ctx> {
         State {
             value_stack: Vec::new(),
             locals: HashMap::new(),
+            memory: None,
         }
     }
 }
@@ -37,7 +59,7 @@ impl<'ctx> std::fmt::Display for State<'ctx> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{{stack=[{}], locals=[{}]}}",
+            "{{stack=[{}], locals=[{}]{}}}",
             self.value_stack
                 .iter()
                 .map(|v| v.to_string())
@@ -48,6 +70,10 @@ impl<'ctx> std::fmt::Display for State<'ctx> {
                 .map(|(k, v)| format!("#{}={}", k.index(), v))
                 .collect::<Vec<_>>()
                 .join(", "),
+            match &self.memory {
+                None => String::from(""),
+                Some(memory) => format!(", memory={:?}", memory),
+            }
         )
     }
 }
@@ -66,6 +92,7 @@ pub struct Execution<'ctx> {
     pub cur_location: Option<ir::InstrLocId>, // None if start of block
     pub status: Status,
     pub checks: Vec<Box<dyn Check<'ctx> + 'ctx>>,
+    pub hotness: HashMap<ir::InstrSeqId, usize>,
 }
 
 static EXECUTION_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -80,6 +107,7 @@ impl<'ctx> Execution<'ctx> {
             cur_location: None,
             status: Status::None,
             checks: Vec::new(),
+            hotness: HashMap::new(),
         }
     }
 

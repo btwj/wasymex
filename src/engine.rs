@@ -1,20 +1,21 @@
-use crate::check::{Check, CheckResult};
+use crate::check::Check;
 use crate::context::Context;
+use crate::flow::{compute_info, Info};
 use crate::reporter::Reporter;
-use crate::state::{Execution, State, Status, TrapReason};
+use crate::state::{Execution, Memory, State, Status, TrapReason};
 use crate::value::{ConcVal, SymVal, Val};
-use log::{debug, info, trace};
+use log::{info, trace};
 use std::collections::{HashMap, VecDeque};
-use walrus::{InstrLocId, ir};
+use walrus::{ir, InstrLocId};
 use z3::ast::Ast;
-use crate::flow::{compute_locs, Locs};
 
 pub struct Engine<'ctx, 'm> {
     context: &'ctx Context<'m>,
     func: Option<&'m walrus::LocalFunction>,
-    locs: Option<Locs>,
+    info: Info,
     executions: VecDeque<Execution<'ctx>>,
     checks: Vec<Box<dyn Check<'ctx> + 'ctx>>,
+    max_loop_iters: usize,
 }
 
 impl<'ctx, 'm> Engine<'ctx, 'm> {
@@ -22,10 +23,15 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
         Engine {
             context,
             func: None,
-            locs: None,
+            info: Info::default(),
             executions: VecDeque::new(),
             checks: Vec::new(),
+            max_loop_iters: 1,
         }
+    }
+
+    pub fn set_max_loop_iters(&mut self, max_loop_iters: usize) {
+        self.max_loop_iters = max_loop_iters;
     }
 
     pub fn add_check(&mut self, check: Box<dyn Check<'ctx> + 'ctx>) {
@@ -45,9 +51,8 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                     info!("Skipping uninitialized function {}", name)
                 }
                 walrus::FunctionKind::Local(local_func) => {
-                    let locs = compute_locs(local_func);
-                    println!("{:?}", locs);
-                    self.locs = Some(locs);
+                    let info = compute_info(local_func);
+                    self.info = info;
                     self.analyze_func(local_func, &name);
                 }
             }
@@ -72,7 +77,20 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
             state.locals.insert(*param_id, symbolic_param.clone());
             inputs.insert(*param_id, symbolic_param);
         }
-        let entry = func.entry_block();
+
+        for local in self.info.locals.iter() {
+            if !state.locals.contains_key(local) {
+                let local_ty = self.context.module.locals.get(*local).ty();
+                state
+                    .locals
+                    .insert(*local, Val::Conc(ConcVal::from_valtype(local_ty)));
+            }
+        }
+
+        for memory in self.context.module.memories.iter() {
+            state.memory = Some(Memory::new(&self.context.context, memory.initial));
+        }
+
         let mut execution = Execution::new(state, func.entry_block());
         for check in &self.checks {
             execution.add_check(dyn_clone::clone_box(&**check));
@@ -83,9 +101,15 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
         let context = self.context;
         let reporter = Reporter::new();
 
-        let mut completed_executions = self.collect_executions();
+        let executions = self.collect_executions();
         reporter.report_func(name);
-        reporter.report_executions(&self.context, &completed_executions);
+        reporter.report_executions(&self.context, &executions);
+
+        let mut completed_executions = executions
+            .into_iter()
+            .filter(|execution| matches!(execution.status, Status::Complete | Status::Trap(_)))
+            .collect();
+
         reporter.report_checks(&context, &inputs, &mut completed_executions);
     }
 
@@ -107,11 +131,41 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
         completed_executions
     }
 
+    fn do_jump_to_seq(&mut self, execution: &mut Execution<'ctx>, seq_id: &ir::InstrSeqId) {
+        execution.cur_block = *seq_id;
+        execution.cur_location = None;
+    }
+
+    fn do_branch(&mut self, execution: &mut Execution<'ctx>, block: &ir::InstrSeqId) {
+        let block_loc = self.info.ends.get(&block).unwrap();
+        let block_instr = self.info.types.get(&block).unwrap();
+
+        match block_instr {
+            ir::Instr::Block(_) => {
+                execution.cur_block = block_loc.block;
+                execution.cur_location = Some(InstrLocId::new(block_loc.loc));
+            }
+            ir::Instr::Loop(_) => {
+                execution.cur_block = *block;
+                execution.cur_location = None;
+            }
+            _ => unreachable!(),
+        }
+    }
+
     pub fn step_execution(&mut self, mut execution: Execution<'ctx>) -> Option<Execution<'ctx>> {
         let func = self.func.unwrap();
         let cur_block = func.block(execution.cur_block);
 
         let mut skipped = execution.cur_location.is_none();
+        if execution.cur_location.is_none() {
+            *execution.hotness.entry(cur_block.id()).or_insert(0) += 1;
+        }
+
+        if *execution.hotness.get(&cur_block.id()).unwrap() > self.max_loop_iters {
+            execution.status = Status::Terminated;
+            return Some(execution);
+        }
 
         for (instr, instr_loc) in &cur_block.instrs {
             // Skip execution to current location
@@ -162,14 +216,13 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                     let value = execution.state.value_stack.pop().unwrap();
                     execution.state.locals.insert(imm.local, value.clone());
                 }
-                ir::Instr::Block(imm) => {
-                    execution.cur_block = imm.seq;
-                    execution.cur_location = None;
+                ir::Instr::Block(ir::Block { seq }) | ir::Instr::Loop(ir::Loop { seq }) => {
+                    self.do_jump_to_seq(&mut execution, &seq);
                     self.push_execution(execution);
                     return None;
                 }
                 ir::Instr::Br(imm) => {
-                    execution.cur_block = imm.block;
+                    self.do_branch(&mut execution, &imm.block);
                     self.push_execution(execution);
                     return None;
                 }
@@ -177,8 +230,8 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                     let condition = execution.state.value_stack.pop().unwrap();
                     match condition {
                         Val::Conc(val) => {
-                            if val.as_i32() == 0 {
-                                execution.cur_block = imm.block;
+                            if val.as_i32() != 0 {
+                                self.do_branch(&mut execution, &imm.block);
                                 self.push_execution(execution);
                                 return None;
                             }
@@ -188,9 +241,7 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                             true_execution
                                 .constraints
                                 .push(val.as_i32()._eq(&self.zero(32)).not());
-                            let true_block_loc = self.locs.as_ref().unwrap().ends.get(&imm.block).unwrap();
-                            true_execution.cur_block = true_block_loc.block;
-                            true_execution.cur_location = Some(InstrLocId::new(true_block_loc.loc));
+                            self.do_branch(&mut true_execution, &imm.block);
 
                             execution.constraints.push(val.as_i32()._eq(&self.zero(32)));
 
@@ -252,10 +303,10 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                 _ => unimplemented!(),
             }
 
-            // trace!("      -> {}", execution.state);
+            trace!("      -> {}", execution.state);
         }
 
-        match self.locs.as_ref().unwrap().ends.get(&cur_block.id()) {
+        match self.info.ends.get(&cur_block.id()) {
             None => {
                 execution.status = Status::Complete;
                 return Some(execution);

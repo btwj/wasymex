@@ -3,7 +3,6 @@ use crate::reporter::Reporter;
 use crate::state::Execution;
 use crate::value::{SymVal, Val};
 use dyn_clone::DynClone;
-use log::trace;
 use std::collections::HashMap;
 use walrus::ir;
 use z3::ast::Ast;

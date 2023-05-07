@@ -27,6 +27,15 @@ impl std::fmt::Display for ConcVal {
     }
 }
 
+impl ConcVal {
+    pub fn from_valtype(val_type: walrus::ValType) -> ConcVal {
+        match val_type {
+            walrus::ValType::I32 => ConcVal(ir::Value::I32(0)),
+            _ => todo!(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum SymVal<'ctx> {
     I32(z3::ast::BV<'ctx>),

@@ -1,6 +1,6 @@
 use crate::check::CheckResult;
 use crate::context::Context;
-use crate::state::Execution;
+use crate::state::{Execution, Status};
 use crate::value::{SymVal, Val};
 use colored::Colorize;
 use std::collections::HashMap;
@@ -25,7 +25,19 @@ impl Reporter {
             format!("Collected {} Execution Paths", executions.len()).blue()
         );
         for execution in executions.iter() {
-            println!("    {}", execution.to_string().white());
+            if execution.status == Status::Complete {
+                println!("    {}", execution.to_string().white());
+            } else {
+                println!(
+                    "    ✗ {} {}",
+                    (match execution.status {
+                        Status::Terminated => "Terminated",
+                        _ => todo!(),
+                    })
+                    .yellow(),
+                    execution.to_string().bright_black()
+                );
+            }
         }
     }
 

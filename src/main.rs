@@ -1,10 +1,10 @@
 mod check;
 mod context;
 mod engine;
+mod flow;
 mod reporter;
 mod state;
 mod value;
-mod flow;
 
 use crate::context::*;
 use crate::engine::*;
@@ -19,6 +19,9 @@ struct Args {
 
     #[arg(short, long)]
     quiet: bool,
+
+    #[arg(short, long)]
+    max_loop_iters: Option<usize>,
 }
 
 fn main() {
@@ -59,6 +62,11 @@ fn main() {
 
     let context = Context::new(&wasm_module);
     let mut engine = Engine::new(&context);
+
+    if let Some(max_loop_iters) = args.max_loop_iters {
+        engine.set_max_loop_iters(max_loop_iters);
+    }
+
     engine.add_check(Box::new(DivisionByZeroCheck::new()));
     engine.analyze_module();
 }
