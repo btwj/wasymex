@@ -1,4 +1,4 @@
-mod check;
+mod checks;
 mod context;
 mod engine;
 mod flow;
@@ -9,8 +9,7 @@ mod value;
 
 use crate::context::*;
 use crate::engine::*;
-use check::DivisionByZeroCheck;
-use check::MemoryCheck;
+use checks::{DivisionByZeroCheck, MemoryCheck};
 use clap::Parser;
 
 #[derive(Parser, Debug)]

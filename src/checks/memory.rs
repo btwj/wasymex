@@ -1,12 +1,11 @@
+use crate::checks::{Check, CheckResult};
 use crate::context::Context;
 use crate::memory::PAGE_SIZE;
 use crate::reporter::Reporter;
 use crate::state::Execution;
-use crate::value::{ConcVal, SymVal, Val};
-use dyn_clone::DynClone;
+use crate::value::{ConcVal, Val};
 use std::collections::HashMap;
 use walrus::ir;
-use z3::ast::Ast;
 
 #[derive(Clone, Debug)]
 pub struct MemoryCheck<'ctx> {

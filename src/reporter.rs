@@ -1,4 +1,4 @@
-use crate::check::CheckResult;
+use crate::checks::CheckResult;
 use crate::context::Context;
 use crate::state::{Execution, Status};
 use crate::value::{SymVal, Val};

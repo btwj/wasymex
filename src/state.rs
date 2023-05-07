@@ -1,7 +1,7 @@
-use crate::check::Check;
+use crate::checks::Check;
 use crate::context::Context;
 use crate::memory::Memory;
-use crate::value::{ConcVal, Val};
+use crate::value::Val;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use walrus::ir;

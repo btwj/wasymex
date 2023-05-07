@@ -1,4 +1,4 @@
-use crate::check::Check;
+use crate::checks::Check;
 use crate::context::Context;
 use crate::flow::{compute_info, Info};
 use crate::memory::Memory;
