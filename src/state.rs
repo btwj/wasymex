@@ -1,5 +1,6 @@
 use crate::checks::Check;
 use crate::context::Context;
+use crate::flow::Loc;
 use crate::memory::Memory;
 use crate::value::Val;
 use std::collections::HashMap;
@@ -20,33 +21,73 @@ pub enum Status {
 }
 
 #[derive(Debug, Clone)]
-pub struct State<'ctx> {
+pub struct Frame<'ctx> {
+    pub func: walrus::FunctionId,
+    pub ret: Option<Loc>,
     pub value_stack: Vec<Val<'ctx>>,
     pub locals: HashMap<ir::LocalId, Val<'ctx>>,
+}
+
+impl<'ctx> Frame<'ctx> {
+    pub fn new(func: walrus::FunctionId, ret: Option<Loc>) -> Self {
+        Frame {
+            func,
+            ret,
+            value_stack: Vec::new(),
+            locals: HashMap::new(),
+        }
+    }
+}
+
+impl<'ctx> std::fmt::Display for Frame<'ctx> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{{func={}, ret={:?}, stack=[{}], locals=[{}]}}",
+            self.func.index(),
+            self.ret,
+            self.value_stack
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            self.locals
+                .iter()
+                .map(|(k, v)| format!("#{}={}", k.index(), v))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct State<'ctx> {
+    pub call_stack: Vec<Frame<'ctx>>,
     pub memory: Option<Memory<'ctx>>,
 }
 
 impl<'ctx> State<'ctx> {
     pub fn new() -> Self {
         State {
-            value_stack: Vec::new(),
-            locals: HashMap::new(),
+            call_stack: Vec::new(),
             memory: None,
         }
     }
 
     pub fn simplify(&mut self) {
-        for value in &mut self.value_stack {
-            match value {
-                Val::Sym(val) => val.simplify(),
-                _ => (),
+        for frame in &mut self.call_stack {
+            for value in &mut frame.value_stack {
+                match value {
+                    Val::Sym(val) => val.simplify(),
+                    _ => (),
+                }
             }
-        }
 
-        for (_, local) in &mut self.locals {
-            match local {
-                Val::Sym(val) => val.simplify(),
-                _ => (),
+            for (_, local) in &mut frame.locals {
+                match local {
+                    Val::Sym(val) => val.simplify(),
+                    _ => (),
+                }
             }
         }
     }
@@ -56,15 +97,11 @@ impl<'ctx> std::fmt::Display for State<'ctx> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{{stack=[{}], locals=[{}]{}}}",
-            self.value_stack
+            "{{[{}]{}}}",
+            self.call_stack
                 .iter()
+                .rev()
                 .map(|v| v.to_string())
-                .collect::<Vec<_>>()
-                .join(", "),
-            self.locals
-                .iter()
-                .map(|(k, v)| format!("#{}={}", k.index(), v))
                 .collect::<Vec<_>>()
                 .join(", "),
             match &self.memory {
@@ -82,6 +119,8 @@ pub struct Execution<'ctx> {
     pub constraints: Vec<z3::ast::Bool<'ctx>>,
     pub cur_block: ir::InstrSeqId,
     pub cur_location: Option<ir::InstrLocId>, // None if start of block
+    /// Tells the engine to advance an extra instruction, used to skip past the `call` instruction when returning
+    pub advance: bool,
     pub status: Status,
     pub checks: Vec<Box<dyn Check<'ctx> + 'ctx>>,
     pub hotness: HashMap<ir::InstrSeqId, usize>,
@@ -97,6 +136,7 @@ impl<'ctx> Execution<'ctx> {
             state,
             cur_block: entry,
             cur_location: None,
+            advance: false,
             status: Status::None,
             checks: Vec::new(),
             hotness: HashMap::new(),

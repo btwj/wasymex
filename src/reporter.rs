@@ -19,7 +19,7 @@ impl Reporter {
         println!("{}", name.to_string().bold().cyan())
     }
 
-    pub fn report_executions(&self, _context: &Context, executions: &Vec<Execution>) {
+    pub fn report_executions(&self, _: &Context, executions: &Vec<Execution>) {
         println!(
             "  {}",
             format!("Collected {} Execution Paths", executions.len()).blue()

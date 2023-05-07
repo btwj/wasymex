@@ -1,0 +1,21 @@
+(module
+    (func $main (param $x i32) (param $y i32) (result i32)
+        (local.get $x)
+        (call $add)
+        (local.get $y)
+        (call $add)
+        (i32.add)
+    )
+    (func $foo
+        (i32.const 1)
+        (call $bar)
+        (drop)
+    )
+    (func $bar)
+    (func $add (param $x i32) (result i32)
+        (call $foo)
+        (local.get $x)
+        (i32.const 1)
+        i32.add
+    )
+)

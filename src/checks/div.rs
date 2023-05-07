@@ -2,7 +2,7 @@ use crate::checks::{Check, CheckResult};
 use crate::context::Context;
 use crate::reporter::Reporter;
 use crate::state::Execution;
-use crate::value::{ConcVal, SymVal, Val};
+use crate::value::{SymVal, Val};
 use std::collections::HashMap;
 use walrus::ir;
 use z3::ast::Ast;
@@ -33,6 +33,7 @@ impl<'ctx> Check<'ctx> for DivisionByZeroCheck<'ctx> {
         loc: &ir::InstrLocId,
     ) {
         if let ir::Instr::Binop(imm) = instr {
+            let frame = execution.state.call_stack.last().unwrap();
             if matches!(
                 imm.op,
                 ir::BinaryOp::I32DivS
@@ -40,7 +41,7 @@ impl<'ctx> Check<'ctx> for DivisionByZeroCheck<'ctx> {
                     | ir::BinaryOp::I32RemS
                     | ir::BinaryOp::I32RemU
             ) {
-                let rhs = &execution.state.value_stack[execution.state.value_stack.len() - 1];
+                let rhs = &frame.value_stack[frame.value_stack.len() - 1];
                 match rhs {
                     Val::Sym(val) => {
                         self.constraints

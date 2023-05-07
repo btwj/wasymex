@@ -33,6 +33,7 @@ impl<'ctx> Check<'ctx> for MemoryCheck<'ctx> {
         loc: &ir::InstrLocId,
     ) {
         if let ir::Instr::Load(imm) = instr {
+            let frame = execution.state.call_stack.last().unwrap();
             let memory = execution.state.memory.as_ref().unwrap();
             let size = &memory.size;
 
@@ -40,7 +41,7 @@ impl<'ctx> Check<'ctx> for MemoryCheck<'ctx> {
                 ir::LoadKind::I32 { .. } => 32,
                 _ => unimplemented!(),
             };
-            let base_index = execution.state.value_stack.last().unwrap();
+            let base_index = frame.value_stack.last().unwrap();
             let end_index = context
                 .bin_op(
                     ir::BinaryOp::I32Add,

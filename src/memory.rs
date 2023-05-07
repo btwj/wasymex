@@ -67,7 +67,7 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
     }
 
     pub fn do_store(
-        &mut self,
+        &self,
         memory: &mut Memory<'ctx>,
         base_index: &Val<'ctx>,
         value: Val<'ctx>,

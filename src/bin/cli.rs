@@ -1,5 +1,9 @@
 use clap::Parser;
-use wasymex::checks::{DivisionByZeroCheck, MemoryCheck};
+use log::info;
+use wasymex::{
+    checks::{DivisionByZeroCheck, MemoryCheck},
+    engine::Engine,
+};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -9,8 +13,30 @@ struct Args {
     #[arg(short, long)]
     quiet: bool,
 
-    #[arg(short, long)]
+    #[arg(long)]
     max_hotness: Option<usize>,
+
+    #[arg(short, long)]
+    main: Option<String>,
+}
+
+fn analyze_module(engine: &mut Engine) {
+    for func in engine.context.module.funcs.iter() {
+        let name = func
+            .name
+            .clone()
+            .unwrap_or(format!("#{}", func.id().index()));
+
+        match &func.kind {
+            walrus::FunctionKind::Import(_) => info!("Skipping import function {}", name),
+            walrus::FunctionKind::Uninitialized(_) => {
+                info!("Skipping uninitialized function {}", name)
+            }
+            walrus::FunctionKind::Local(local_func) => {
+                engine.analyze_func(local_func, func.id(), &name);
+            }
+        }
+    }
 }
 
 fn main() {
@@ -51,6 +77,7 @@ fn main() {
 
     let context = wasymex::context::Context::new(&wasm_module);
     let mut engine = wasymex::engine::Engine::new(&context);
+    engine.initialize();
 
     if let Some(max_loop_iters) = args.max_hotness {
         engine.set_max_hotness(max_loop_iters);
@@ -58,5 +85,14 @@ fn main() {
 
     engine.add_check(Box::new(DivisionByZeroCheck::new()));
     engine.add_check(Box::new(MemoryCheck::new()));
-    engine.analyze_module();
+
+    match args.main {
+        None => analyze_module(&mut engine),
+        Some(main) => {
+            let func_id = context.module.funcs.by_name(&main).unwrap();
+            let func = context.module.funcs.get(func_id);
+            let local_func = wasymex::engine::as_local_func(func).unwrap();
+            engine.analyze_func(local_func, func_id, &main)
+        }
+    }
 }

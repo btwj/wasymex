@@ -14,7 +14,7 @@ struct InfoVisitor<'a> {
     to_update_next: Vec<Vec<ir::InstrSeqId>>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Info {
     locs: Vec<Loc>,
     seqs: Vec<ir::InstrSeqId>,
