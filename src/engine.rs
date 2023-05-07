@@ -60,13 +60,8 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
         }
     }
 
-    pub fn analyze_func(&mut self, func: &'m walrus::LocalFunction, name: &str) {
-        info!("Analyzing function #{}", name);
-
-        self.func = Some(func);
+    pub fn get_inputs(&self, func: &'m walrus::LocalFunction) -> HashMap<ir::LocalId, Val<'ctx>> {
         let mut inputs = HashMap::new();
-
-        let mut state = State::new();
         for param_id in func.args.iter() {
             let param = self.context.module.locals.get(*param_id);
             let param_ty = param.ty();
@@ -75,8 +70,17 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                 param_ty,
                 format!("local{}", param_id.index()),
             ));
-            state.locals.insert(*param_id, symbolic_param.clone());
             inputs.insert(*param_id, symbolic_param);
+        }
+        inputs
+    }
+
+    pub fn get_initial_execution(&mut self, func: &'m walrus::LocalFunction) -> Execution<'ctx> {
+        let inputs = self.get_inputs(func);
+        let mut state = State::new();
+
+        for (param_id, param) in inputs.iter() {
+            state.locals.insert(*param_id, param.clone());
         }
 
         for local in self.info.locals.iter() {
@@ -92,21 +96,32 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
             state.memory = Some(Memory::new(&self.context.context, memory.initial));
         }
 
-        let mut execution = Execution::new(state, func.entry_block());
+        let execution = Execution::new(state, func.entry_block());
+        execution
+    }
+
+    pub fn get_func_executions(&mut self, func: &'m walrus::LocalFunction) -> Vec<Execution<'ctx>> {
+        self.func = Some(func);
+        let mut execution = self.get_initial_execution(func);
+
         for check in &self.checks {
             execution.add_check(dyn_clone::clone_box(&**check));
         }
 
         self.push_execution(execution);
+        self.collect_executions()
+    }
 
-        let context = self.context;
-        let reporter = Reporter::new();
+    pub fn analyze_func(&mut self, func: &'m walrus::LocalFunction, name: &str) {
+        info!("Analyzing function #{}", name);
 
-        let mut executions = self.collect_executions();
+        let mut executions = self.get_func_executions(func);
+        let inputs = self.get_inputs(func);
         executions
             .iter_mut()
             .for_each(|execution| execution.state.simplify());
 
+        let reporter = Reporter::new();
         reporter.report_func(name);
         reporter.report_executions(self.context, &executions);
 
@@ -115,14 +130,14 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
             .filter(|execution| matches!(execution.status, Status::Complete | Status::Trap(_)))
             .collect();
 
-        reporter.report_checks(context, &inputs, &mut completed_executions);
+        reporter.report_checks(self.context, &inputs, &mut completed_executions);
     }
 
     pub fn push_execution(&mut self, execution: Execution<'ctx>) {
         self.executions.push_back(execution);
     }
 
-    pub fn collect_executions(&mut self) -> Vec<Execution<'ctx>> {
+    fn collect_executions(&mut self) -> Vec<Execution<'ctx>> {
         let mut completed_executions = Vec::<Execution>::new();
         while let Some(execution) = self.executions.pop_front() {
             match self.step_execution(execution) {
