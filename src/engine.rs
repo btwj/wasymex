@@ -1,8 +1,9 @@
 use crate::check::Check;
 use crate::context::Context;
 use crate::flow::{compute_info, Info};
+use crate::memory::Memory;
 use crate::reporter::Reporter;
-use crate::state::{Execution, Memory, State, Status, TrapReason};
+use crate::state::{Execution, State, Status, TrapReason};
 use crate::value::{ConcVal, SymVal, Val};
 use log::{info, trace};
 use std::collections::{HashMap, VecDeque};
@@ -10,7 +11,7 @@ use walrus::{ir, InstrLocId};
 use z3::ast::Ast;
 
 pub struct Engine<'ctx, 'm> {
-    context: &'ctx Context<'m>,
+    pub context: &'ctx Context<'m>,
     func: Option<&'m walrus::LocalFunction>,
     info: Info,
     executions: VecDeque<Execution<'ctx>>,
@@ -101,7 +102,11 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
         let context = self.context;
         let reporter = Reporter::new();
 
-        let executions = self.collect_executions();
+        let mut executions = self.collect_executions();
+        executions
+            .iter_mut()
+            .for_each(|execution| execution.state.simplify());
+
         reporter.report_func(name);
         reporter.report_executions(self.context, &executions);
 
@@ -216,6 +221,7 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                     let value = execution.state.value_stack.pop().unwrap();
                     execution.state.locals.insert(imm.local, value.clone());
                 }
+                // Control flow
                 ir::Instr::Block(ir::Block { seq }) | ir::Instr::Loop(ir::Loop { seq }) => {
                     self.do_jump_to_seq(&mut execution, seq);
                     self.push_execution(execution);
@@ -296,13 +302,80 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                         }
                     }
                 }
-                ir::Instr::Return(_imm) => {
+                ir::Instr::Return(_) => {
                     execution.status = Status::Complete;
                     return Some(execution);
+                }
+                // Memory Instructions
+                ir::Instr::MemorySize(_) => {
+                    let size = execution.state.memory.as_ref().unwrap().size.clone();
+                    execution.state.value_stack.push(size);
+                }
+                ir::Instr::MemoryGrow(_) => {
+                    let size = execution.state.memory.as_ref().unwrap().size.clone();
+                    let num_pages = execution.state.value_stack.pop().unwrap();
+                    let new_size = self
+                        .bin_op(ir::BinaryOp::I32Add, &size, &num_pages)
+                        .unwrap();
+                    execution.state.memory.as_mut().unwrap().size = new_size;
+                    execution.state.value_stack.push(num_pages);
+                }
+                ir::Instr::Load(imm) => {
+                    let memory = execution.state.memory.as_ref().unwrap();
+                    let offset = imm.arg.offset as i32;
+                    let index = execution.state.value_stack.pop().unwrap();
+                    let access_index = self
+                        .bin_op(
+                            ir::BinaryOp::I32Add,
+                            &Val::Conc(ConcVal(ir::Value::I32(offset))),
+                            &index,
+                        )
+                        .unwrap();
+
+                    let value = match imm.kind {
+                        ir::LoadKind::I32 { .. } => {
+                            self.do_load(&memory, &access_index, 32, 32, false)
+                        }
+                        ir::LoadKind::I32_8 {
+                            kind: ir::ExtendedLoad::ZeroExtend,
+                        } => self.do_load(&memory, &access_index, 32, 8, true),
+                        ir::LoadKind::I32_8 { .. } => {
+                            self.do_load(&memory, &access_index, 32, 8, false)
+                        }
+                        ir::LoadKind::I32_16 {
+                            kind: ir::ExtendedLoad::ZeroExtend,
+                        } => self.do_load(&memory, &access_index, 32, 16, true),
+                        ir::LoadKind::I32_16 { .. } => {
+                            self.do_load(&memory, &access_index, 32, 16, false)
+                        }
+                        _ => unimplemented!(),
+                    };
+                    execution.state.value_stack.push(value);
+                }
+                ir::Instr::Store(imm) => {
+                    let memory = execution.state.memory.as_mut().unwrap();
+                    let offset = imm.arg.offset as i32;
+                    let index = execution.state.value_stack.pop().unwrap();
+                    let access_index = self
+                        .bin_op(
+                            ir::BinaryOp::I32Add,
+                            &Val::Conc(ConcVal(ir::Value::I32(offset))),
+                            &index,
+                        )
+                        .unwrap();
+
+                    let value = execution.state.value_stack.pop().unwrap();
+                    match imm.kind {
+                        ir::StoreKind::I32 { .. } => {
+                            self.do_store(memory, &access_index, value, 32)
+                        }
+                        _ => unimplemented!(),
+                    }
                 }
                 _ => unimplemented!(),
             }
 
+            execution.state.simplify();
             trace!("      -> {}", execution.state);
         }
 
@@ -325,74 +398,6 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
     pub fn zero(&self, size: u32) -> z3::ast::BV<'ctx> {
         self.context.zero(size)
     }
-    pub fn one(&self, size: u32) -> z3::ast::BV<'ctx> {
-        self.context.one(size)
-    }
-
-    pub fn bin_conc(
-        &self,
-        op: ir::BinaryOp,
-        lhs: &ConcVal,
-        rhs: &ConcVal,
-    ) -> Result<ConcVal, TrapReason> {
-        Ok(ConcVal(match op {
-            ir::BinaryOp::I32Add => ir::Value::I32(lhs.as_i32().wrapping_add(rhs.as_i32())),
-            ir::BinaryOp::I32Sub => ir::Value::I32(lhs.as_i32().wrapping_sub(rhs.as_i32())),
-            ir::BinaryOp::I32Mul => ir::Value::I32(lhs.as_i32().wrapping_mul(rhs.as_i32())),
-            ir::BinaryOp::I32DivS => match lhs.as_i32().checked_div(rhs.as_i32()) {
-                Some(value) => ir::Value::I32(value),
-                None => return Err(TrapReason::DivisionByZero),
-            },
-            ir::BinaryOp::I32DivU => match (lhs.as_i32() as u32).checked_div(rhs.as_i32() as u32) {
-                Some(value) => ir::Value::I32(value as i32),
-                None => return Err(TrapReason::DivisionByZero),
-            },
-            ir::BinaryOp::I32LtU => {
-                ir::Value::I32(i32::from((lhs.as_i32() as u32) < (rhs.as_i32() as u32)))
-            }
-            ir::BinaryOp::I32LtS => ir::Value::I32(i32::from(lhs.as_i32() < rhs.as_i32())),
-            ir::BinaryOp::I32GtS => ir::Value::I32(i32::from(lhs.as_i32() > rhs.as_i32())),
-            ir::BinaryOp::I32LeS => ir::Value::I32(i32::from(lhs.as_i32() <= rhs.as_i32())),
-            ir::BinaryOp::I32GeS => ir::Value::I32(i32::from(lhs.as_i32() >= rhs.as_i32())),
-            _ => panic!(),
-        }))
-    }
-
-    pub fn bin_sym(
-        &self,
-        op: ir::BinaryOp,
-        lhs: &SymVal<'ctx>,
-        rhs: &SymVal<'ctx>,
-    ) -> SymVal<'ctx> {
-        match op {
-            ir::BinaryOp::I32Add => SymVal::I32(lhs.as_i32().bvadd(rhs.as_i32())),
-            ir::BinaryOp::I32Sub => SymVal::I32(lhs.as_i32().bvsub(rhs.as_i32())),
-            ir::BinaryOp::I32Mul => SymVal::I32(lhs.as_i32().bvmul(rhs.as_i32())),
-            ir::BinaryOp::I32DivS => SymVal::I32(lhs.as_i32().bvsdiv(rhs.as_i32())),
-            ir::BinaryOp::I32DivU => todo!(),
-            ir::BinaryOp::I32LtS => SymVal::I32(
-                lhs.as_i32()
-                    .bvslt(rhs.as_i32())
-                    .ite(&self.one(32), &self.zero(32)),
-            ),
-            ir::BinaryOp::I32LeS => SymVal::I32(
-                lhs.as_i32()
-                    .bvsle(rhs.as_i32())
-                    .ite(&self.one(32), &self.zero(32)),
-            ),
-            ir::BinaryOp::I32GtS => SymVal::I32(
-                lhs.as_i32()
-                    .bvsgt(rhs.as_i32())
-                    .ite(&self.one(32), &self.zero(32)),
-            ),
-            ir::BinaryOp::I32GeS => SymVal::I32(
-                lhs.as_i32()
-                    .bvsge(rhs.as_i32())
-                    .ite(&self.one(32), &self.zero(32)),
-            ),
-            _ => todo!(),
-        }
-    }
 
     pub fn bin_op(
         &self,
@@ -400,19 +405,6 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
         lhs: &Val<'ctx>,
         rhs: &Val<'ctx>,
     ) -> Result<Val<'ctx>, TrapReason> {
-        Ok(match (lhs, rhs) {
-            (Val::Conc(lhs_val), Val::Conc(rhs_val)) => {
-                Val::Conc(self.bin_conc(op, lhs_val, rhs_val)?)
-            }
-            (Val::Sym(lhs_val), Val::Conc(rhs_val)) => {
-                let rhs_val: SymVal = SymVal::from_concrete(&self.context.context, rhs_val);
-                Val::Sym(self.bin_sym(op, lhs_val, &rhs_val))
-            }
-            (Val::Conc(lhs_val), Val::Sym(rhs_val)) => {
-                let lhs_val: SymVal = SymVal::from_concrete(&self.context.context, lhs_val);
-                Val::Sym(self.bin_sym(op, &lhs_val, rhs_val))
-            }
-            (Val::Sym(lhs_val), Val::Sym(rhs_val)) => Val::Sym(self.bin_sym(op, lhs_val, rhs_val)),
-        })
+        self.context.bin_op(op, lhs, rhs)
     }
 }

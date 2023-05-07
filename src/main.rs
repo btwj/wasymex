@@ -2,6 +2,7 @@ mod check;
 mod context;
 mod engine;
 mod flow;
+mod memory;
 mod reporter;
 mod state;
 mod value;
@@ -9,8 +10,8 @@ mod value;
 use crate::context::*;
 use crate::engine::*;
 use check::DivisionByZeroCheck;
+use check::MemoryCheck;
 use clap::Parser;
-
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -68,5 +69,6 @@ fn main() {
     }
 
     engine.add_check(Box::new(DivisionByZeroCheck::new()));
+    engine.add_check(Box::new(MemoryCheck::new()));
     engine.analyze_module();
 }

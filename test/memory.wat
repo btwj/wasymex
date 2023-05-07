@@ -1,0 +1,33 @@
+(module
+    (memory 1)
+
+    (func $read (result i32)
+        (i32.load (i32.const 123))
+    )
+
+    (func $readwrite (param $x i32) (result i32)
+        (drop (memory.grow (i32.const 1)))
+        (local.get $x)
+        (i32.const 123456)
+        (i32.store)
+        (i32.const 123456)
+        (i32.load)
+    )
+
+    (func $readoob (param $x i32)
+        (memory.grow (local.get $x))
+        (drop)
+        (drop (i32.load (i32.const 123456)))
+    )
+
+    (func $readwritediv (param $x i32) (result i32)
+        (drop (memory.grow (i32.const 1)))
+        (local.get $x)
+        (i32.const 123456)
+        (i32.store)
+        (i32.const 123)
+        (i32.const 123456)
+        (i32.load)
+        (i32.div_s)
+    )
+)

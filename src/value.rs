@@ -1,9 +1,19 @@
 use walrus::ir;
+use z3::ast::Ast;
 
 #[derive(Debug, Clone)]
 pub enum Val<'ctx> {
     Sym(SymVal<'ctx>),
     Conc(ConcVal),
+}
+
+impl<'ctx> Val<'ctx> {
+    pub fn as_sym(&self, context: &'ctx z3::Context) -> SymVal<'ctx> {
+        match self {
+            Val::Sym(val) => val.clone(),
+            Val::Conc(val) => SymVal::from_concrete(context, val),
+        }
+    }
 }
 
 impl<'ctx> std::fmt::Display for Val<'ctx> {
@@ -65,6 +75,12 @@ impl<'ctx> SymVal<'ctx> {
         match val_type {
             walrus::ValType::I32 => SymVal::I32(z3::ast::BV::new_const(context, name, 32)),
             _ => todo!(),
+        }
+    }
+
+    pub fn simplify(&mut self) {
+        match self {
+            SymVal::I32(val) => *val = val.simplify(),
         }
     }
 

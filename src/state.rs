@@ -1,10 +1,10 @@
 use crate::check::Check;
 use crate::context::Context;
-use crate::value::Val;
+use crate::memory::Memory;
+use crate::value::{ConcVal, Val};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use walrus::ir;
-
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TrapReason {
@@ -20,25 +20,6 @@ pub enum Status {
 }
 
 #[derive(Debug, Clone)]
-pub struct Memory<'ctx> {
-    pub size: u32, // size in bytes
-    pub array: z3::ast::Array<'ctx>,
-}
-
-impl<'ctx> Memory<'ctx> {
-    pub fn new(context: &'ctx z3::Context, initial: u32) -> Self {
-        Memory {
-            size: initial,
-            array: z3::ast::Array::const_array(
-                context,
-                &z3::Sort::bitvector(context, 8),
-                &z3::ast::BV::from_i64(context, 0, 8),
-            ),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct State<'ctx> {
     pub value_stack: Vec<Val<'ctx>>,
     pub locals: HashMap<ir::LocalId, Val<'ctx>>,
@@ -51,6 +32,22 @@ impl<'ctx> State<'ctx> {
             value_stack: Vec::new(),
             locals: HashMap::new(),
             memory: None,
+        }
+    }
+
+    pub fn simplify(&mut self) {
+        for value in &mut self.value_stack {
+            match value {
+                Val::Sym(val) => val.simplify(),
+                _ => (),
+            }
+        }
+
+        for (_, local) in &mut self.locals {
+            match local {
+                Val::Sym(val) => val.simplify(),
+                _ => (),
+            }
         }
     }
 }
@@ -76,11 +73,6 @@ impl<'ctx> std::fmt::Display for State<'ctx> {
             }
         )
     }
-}
-
-pub struct Loc {
-    block: ir::InstrSeqId,
-    loc: ir::InstrLocId,
 }
 
 #[derive(Debug, Clone)]
