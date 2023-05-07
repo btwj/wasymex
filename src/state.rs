@@ -4,7 +4,7 @@ use crate::value::Val;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use walrus::ir;
-use z3;
+
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TrapReason {

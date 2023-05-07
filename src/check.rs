@@ -94,7 +94,7 @@ impl<'ctx> Check<'ctx> for DivisionByZeroCheck<'ctx> {
         execution: &Execution<'ctx>,
         inputs: &HashMap<ir::LocalId, Val<'ctx>>,
     ) -> CheckResult {
-        let mut solver = execution.get_solver(context);
+        let solver = execution.get_solver(context);
         for (loc, constraint) in &self.constraints {
             solver.push();
             solver.assert(constraint);

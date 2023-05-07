@@ -63,7 +63,7 @@ impl<'ctx> SymVal<'ctx> {
         name: String,
     ) -> SymVal<'ctx> {
         match val_type {
-            walrus::ValType::I32 => SymVal::I32(z3::ast::BV::new_const(&context, name, 32)),
+            walrus::ValType::I32 => SymVal::I32(z3::ast::BV::new_const(context, name, 32)),
             _ => todo!(),
         }
     }

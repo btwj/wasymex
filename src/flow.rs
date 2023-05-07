@@ -40,13 +40,13 @@ impl<'instr, 'a> ir::Visitor<'instr> for InfoVisitor<'a> {
             .extend(last_to_update);
     }
 
-    fn visit_instr(&mut self, instr: &'instr ir::Instr, instr_loc: &'instr ir::InstrLocId) {
+    fn visit_instr(&mut self, _instr: &'instr ir::Instr, instr_loc: &'instr ir::InstrLocId) {
         let loc = Loc {
             block: *self.blocks.last().unwrap(),
             loc: instr_loc.data(),
         };
 
-        self.info.locs.push(loc.clone());
+        self.info.locs.push(loc);
 
         let to_update = self.to_update_next.last_mut().unwrap();
         while let Some(seq) = to_update.pop() {

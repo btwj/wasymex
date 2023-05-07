@@ -103,14 +103,14 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
 
         let executions = self.collect_executions();
         reporter.report_func(name);
-        reporter.report_executions(&self.context, &executions);
+        reporter.report_executions(self.context, &executions);
 
         let mut completed_executions = executions
             .into_iter()
             .filter(|execution| matches!(execution.status, Status::Complete | Status::Trap(_)))
             .collect();
 
-        reporter.report_checks(&context, &inputs, &mut completed_executions);
+        reporter.report_checks(context, &inputs, &mut completed_executions);
     }
 
     pub fn push_execution(&mut self, execution: Execution<'ctx>) {
@@ -137,8 +137,8 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
     }
 
     fn do_branch(&mut self, execution: &mut Execution<'ctx>, block: &ir::InstrSeqId) {
-        let block_loc = self.info.ends.get(&block).unwrap();
-        let block_instr = self.info.types.get(&block).unwrap();
+        let block_loc = self.info.ends.get(block).unwrap();
+        let block_instr = self.info.types.get(block).unwrap();
 
         match block_instr {
             ir::Instr::Block(_) => {
@@ -181,7 +181,7 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
 
             let mut execution_checks = std::mem::take(&mut execution.checks);
             for check in &mut execution_checks {
-                check.check(&self.context, &execution, instr, instr_loc);
+                check.check(self.context, &execution, instr, instr_loc);
             }
             execution.checks = execution_checks;
 
@@ -217,7 +217,7 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                     execution.state.locals.insert(imm.local, value.clone());
                 }
                 ir::Instr::Block(ir::Block { seq }) | ir::Instr::Loop(ir::Loop { seq }) => {
-                    self.do_jump_to_seq(&mut execution, &seq);
+                    self.do_jump_to_seq(&mut execution, seq);
                     self.push_execution(execution);
                     return None;
                 }
@@ -296,7 +296,7 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                         }
                     }
                 }
-                ir::Instr::Return(imm) => {
+                ir::Instr::Return(_imm) => {
                     execution.status = Status::Complete;
                     return Some(execution);
                 }
@@ -309,13 +309,13 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
         match self.info.ends.get(&cur_block.id()) {
             None => {
                 execution.status = Status::Complete;
-                return Some(execution);
+                Some(execution)
             }
             Some(end) => {
                 execution.cur_block = end.block;
                 execution.cur_location = Some(ir::InstrLocId::new(end.loc));
                 self.push_execution(execution);
-                return None;
+                None
             }
         }
     }

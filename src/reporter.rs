@@ -16,10 +16,10 @@ impl Reporter {
     }
 
     pub fn report_func(&self, name: &str) {
-        println!("{}", format!("{}", name).bold().cyan())
+        println!("{}", name.to_string().bold().cyan())
     }
 
-    pub fn report_executions(&self, context: &Context, executions: &Vec<Execution>) {
+    pub fn report_executions(&self, _context: &Context, executions: &Vec<Execution>) {
         println!(
             "  {}",
             format!("Collected {} Execution Paths", executions.len()).blue()
@@ -73,7 +73,7 @@ impl Reporter {
     ) {
         println!("  {}", "Execution Path Checks".blue());
         for execution in executions {
-            let model_input = execution.solve(&context);
+            let model_input = execution.solve(context);
             match model_input {
                 None => {
                     println!(
@@ -87,14 +87,14 @@ impl Reporter {
                         format!(
                             "    #{}: Feasible; Input=[{}]",
                             execution.id,
-                            Self::format_model(&inputs, &model)
+                            Self::format_model(inputs, &model)
                         )
                         .white()
                     );
 
                     let mut execution_checks = std::mem::take(&mut execution.checks);
                     for check in &mut execution_checks {
-                        match check.run(&context, &execution, inputs) {
+                        match check.run(context, execution, inputs) {
                             CheckResult::Ok => {
                                 println!("        {}", format!("[{}] ✓", check.name()).green())
                             }

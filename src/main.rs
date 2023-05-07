@@ -10,7 +10,7 @@ use crate::context::*;
 use crate::engine::*;
 use check::DivisionByZeroCheck;
 use clap::Parser;
-use fern;
+
 
 #[derive(Parser, Debug)]
 struct Args {
