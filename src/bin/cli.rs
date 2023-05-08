@@ -89,7 +89,13 @@ fn main() {
     match args.main {
         None => analyze_module(&mut engine),
         Some(main) => {
-            let func_id = context.module.funcs.by_name(&main).unwrap();
+            let func_id = match context.module.funcs.by_name(&main) {
+                Some(id) => id,
+                None => {
+                    let funcs = context.module.funcs.iter().collect::<Vec<_>>();
+                    funcs[main.parse::<usize>().unwrap()].id()
+                }
+            };
             let func = context.module.funcs.get(func_id);
             let local_func = wasymex::engine::as_local_func(func).unwrap();
             engine.analyze_func(local_func, func_id, &main)

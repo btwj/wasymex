@@ -6,6 +6,7 @@ use crate::value::Val;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use walrus::ir;
+use z3::ast::Ast;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TrapReason {
@@ -88,6 +89,13 @@ impl<'ctx> State<'ctx> {
                     Val::Sym(val) => val.simplify(),
                     _ => (),
                 }
+            }
+
+            match &mut self.memory {
+                Some(memory) => {
+                    memory.array = memory.array.simplify();
+                }
+                None => (),
             }
         }
     }
@@ -175,8 +183,10 @@ impl<'ctx> std::fmt::Display for Execution<'ctx> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "#{}: state={}; constraints={:?}",
-            self.id, self.state, self.constraints
+            // "#{}: state={}; constraints={:?}",
+            // self.id, self.state, self.constraints
+            "#{}: constraints={:?}",
+            self.id, self.constraints
         )
     }
 }

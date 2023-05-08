@@ -104,8 +104,12 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
         &mut self,
         func: &'m walrus::LocalFunction,
         id: walrus::FunctionId,
+        initial: Option<Execution<'ctx>>,
     ) -> Vec<Execution<'ctx>> {
-        let mut execution = self.get_initial_execution(func, id);
+        let mut execution = match initial {
+            None => self.get_initial_execution(func, id),
+            Some(execution) => execution,
+        };
 
         for check in &self.checks {
             execution.add_check(dyn_clone::clone_box(&**check));
@@ -123,7 +127,7 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
     ) {
         info!("Analyzing function #{}", name);
 
-        let mut executions = self.get_func_executions(func, id);
+        let mut executions = self.get_func_executions(func, id, None);
         let inputs = self.get_inputs(func);
         executions
             .iter_mut()
@@ -164,11 +168,15 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
         execution.cur_location = None;
     }
 
-    fn do_branch(&self, execution: &mut Execution<'ctx>, block: &ir::InstrSeqId) {
+    fn do_branch(&self, execution: &mut Execution<'ctx>, block: &ir::InstrSeqId) -> bool {
         let info = self.info[execution.state.call_stack.last().unwrap().func.index()]
             .as_ref()
             .unwrap();
-        let block_loc = info.ends.get(block).unwrap();
+
+        let block_loc = match info.ends.get(block) {
+            None => return true,
+            Some(end) => end,
+        };
         let block_instr = info.types.get(block).unwrap();
 
         match block_instr {
@@ -182,6 +190,7 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
             }
             _ => unreachable!(),
         }
+        return false;
     }
 
     pub fn step_execution(&mut self, mut execution: Execution<'ctx>) -> Option<Execution<'ctx>> {
@@ -228,6 +237,18 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                 ir::Instr::Drop(_) => {
                     frame.value_stack.pop().unwrap();
                 }
+                ir::Instr::Unop(imm) => {
+                    let op = frame.value_stack.pop().unwrap();
+                    match self.un_op(imm.op, &op) {
+                        Ok(result) => {
+                            frame.value_stack.push(result);
+                        }
+                        Err(trap) => {
+                            execution.status = Status::Trap(trap);
+                            return Some(execution);
+                        }
+                    }
+                }
                 ir::Instr::Binop(imm) => {
                     let rhs = frame.value_stack.pop().unwrap();
                     let lhs = frame.value_stack.pop().unwrap();
@@ -256,6 +277,35 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                     let value = frame.value_stack.last().unwrap();
                     frame.locals.insert(imm.local, value.clone());
                 }
+                ir::Instr::Select(imm) => {
+                    let cond = frame.value_stack.pop().unwrap();
+                    let rhs = frame
+                        .value_stack
+                        .pop()
+                        .unwrap()
+                        .as_sym(&self.context.context);
+                    let lhs = frame
+                        .value_stack
+                        .pop()
+                        .unwrap()
+                        .as_sym(&self.context.context);
+
+                    let sym_cond = cond.as_sym(&self.context.context);
+                    let sym_val = sym_cond
+                        .as_i32()
+                        ._eq(&self.zero(32))
+                        .ite(lhs.as_i32(), rhs.as_i32());
+                    frame.value_stack.push(Val::Sym(SymVal::I32(sym_val)));
+                }
+                // Globals (TODO)
+                ir::Instr::GlobalGet(imm) => {
+                    frame
+                        .value_stack
+                        .push(Val::Conc(ConcVal(ir::Value::I32(0))));
+                }
+                ir::Instr::GlobalSet(imm) => {
+                    frame.value_stack.pop();
+                }
                 // Control flow
                 ir::Instr::Block(ir::Block { seq }) | ir::Instr::Loop(ir::Loop { seq }) => {
                     self.do_jump_to_seq(&mut execution, seq);
@@ -263,7 +313,9 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                     return None;
                 }
                 ir::Instr::Br(imm) => {
-                    self.do_branch(&mut execution, &imm.block);
+                    if self.do_branch(&mut execution, &imm.block) {
+                        break;
+                    }
                     self.push_execution(execution);
                     return None;
                 }
@@ -272,7 +324,9 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                     match condition {
                         Val::Conc(val) => {
                             if val.as_i32() != 0 {
-                                self.do_branch(&mut execution, &imm.block);
+                                if self.do_branch(&mut execution, &imm.block) {
+                                    break;
+                                }
                                 self.push_execution(execution);
                                 return None;
                             }
@@ -282,7 +336,9 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                             true_execution
                                 .constraints
                                 .push(val.as_i32()._eq(&self.zero(32)).not());
-                            self.do_branch(&mut true_execution, &imm.block);
+                            if self.do_branch(&mut true_execution, &imm.block) {
+                                break;
+                            }
 
                             execution.constraints.push(val.as_i32()._eq(&self.zero(32)));
 
@@ -412,15 +468,15 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                         }
                         ir::LoadKind::I32_8 {
                             kind: ir::ExtendedLoad::ZeroExtend,
-                        } => self.do_load(&memory, &access_index, 32, 8, true),
+                        } => self.do_load(&memory, &access_index, 8, 32, true),
                         ir::LoadKind::I32_8 { .. } => {
-                            self.do_load(&memory, &access_index, 32, 8, false)
+                            self.do_load(&memory, &access_index, 8, 32, false)
                         }
                         ir::LoadKind::I32_16 {
                             kind: ir::ExtendedLoad::ZeroExtend,
-                        } => self.do_load(&memory, &access_index, 32, 16, true),
+                        } => self.do_load(&memory, &access_index, 16, 32, true),
                         ir::LoadKind::I32_16 { .. } => {
-                            self.do_load(&memory, &access_index, 32, 16, false)
+                            self.do_load(&memory, &access_index, 16, 32, false)
                         }
                         _ => unimplemented!(),
                     };
@@ -429,6 +485,7 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                 ir::Instr::Store(imm) => {
                     let memory = execution.state.memory.as_mut().unwrap();
                     let offset = imm.arg.offset as i32;
+                    let value = frame.value_stack.pop().unwrap();
                     let index = frame.value_stack.pop().unwrap();
                     let access_index = self
                         .bin_op(
@@ -438,10 +495,15 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                         )
                         .unwrap();
 
-                    let value = frame.value_stack.pop().unwrap();
                     match imm.kind {
                         ir::StoreKind::I32 { .. } => {
                             self.do_store(memory, &access_index, value, 32)
+                        }
+                        ir::StoreKind::I32_8 { .. } => {
+                            self.do_store(memory, &access_index, value, 8)
+                        }
+                        ir::StoreKind::I32_16 { .. } => {
+                            self.do_store(memory, &access_index, value, 16)
                         }
                         _ => unimplemented!(),
                     }
@@ -461,6 +523,7 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
                 match execution.state.call_stack.last_mut() {
                     None => {
                         execution.status = Status::Complete;
+                        execution.state.call_stack.push(old_frame);
                         Some(execution)
                     }
                     Some(prev_frame) => {
@@ -496,5 +559,9 @@ impl<'ctx, 'm> Engine<'ctx, 'm> {
         rhs: &Val<'ctx>,
     ) -> Result<Val<'ctx>, TrapReason> {
         self.context.bin_op(op, lhs, rhs)
+    }
+
+    pub fn un_op(&self, op: ir::UnaryOp, operand: &Val<'ctx>) -> Result<Val<'ctx>, TrapReason> {
+        self.context.un_op(op, operand)
     }
 }

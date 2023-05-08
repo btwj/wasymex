@@ -41,6 +41,17 @@ impl Reporter {
         }
     }
 
+    pub fn format_model_values<'ctx, T: z3::ast::Ast<'ctx> + std::fmt::Debug>(
+        variables: &[T],
+        model: &z3::Model<'ctx>,
+    ) -> String {
+        variables
+            .iter()
+            .map(|var| format!("{:?}={:?}", var, model.eval(var, true).unwrap()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     pub fn format_model(inputs: &HashMap<ir::LocalId, Val>, model: &z3::Model) -> String {
         inputs
             .iter()

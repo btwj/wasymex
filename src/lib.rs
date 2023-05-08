@@ -4,5 +4,5 @@ pub mod engine;
 mod flow;
 mod memory;
 pub mod reporter;
-mod state;
-mod value;
+pub mod state;
+pub mod value;

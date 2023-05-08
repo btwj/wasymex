@@ -39,6 +39,8 @@ impl<'ctx> Check<'ctx> for MemoryCheck<'ctx> {
 
             let load_size = match imm.kind {
                 ir::LoadKind::I32 { .. } => 32,
+                ir::LoadKind::I32_8 { .. } => 8,
+                ir::LoadKind::I32_16 { .. } => 16,
                 _ => unimplemented!(),
             };
             let base_index = frame.value_stack.last().unwrap();
